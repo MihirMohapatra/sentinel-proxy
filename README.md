@@ -1,5 +1,15 @@
 # Sentinel Proxy
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Rust-1.80+-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/Web-Axum%20%2B%20Tokio-46E0B6?style=for-the-badge" alt="Web Framework">
+  <img src="https://img.shields.io/badge/Proxy-Round--Robin%20Load%20Balancing-FF6B6B?style=for-the-badge" alt="Reverse Proxy">
+</p>
+
+<p align="center">
+  Rust reverse proxy with round-robin upstream routing, health checks, request stats, and structured logging.
+</p>
+
 Sentinel Proxy is a small Rust reverse proxy built with Axum, Tokio, and Reqwest. It forwards incoming HTTP requests to one or more configured upstream services using round-robin routing and exposes lightweight operational endpoints for health and runtime stats.
 
 ## Features
@@ -16,12 +26,12 @@ Sentinel Proxy is a small Rust reverse proxy built with Axum, Tokio, and Reqwest
 
 ```text
 sentinel-proxy/
-├── Cargo.toml
-├── Cargo.lock
-├── .env.example
-├── README.md
-└── src/
-    └── main.rs
+|-- Cargo.toml
+|-- Cargo.lock
+|-- .env.example
+|-- README.md
+`-- src/
+    `-- main.rs
 ```
 
 ## Prerequisites
