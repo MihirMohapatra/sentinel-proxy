@@ -11,8 +11,8 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use axum::{
     body::Body,
-    extract::{OriginalUri, State},
-    http::{HeaderMap, HeaderName, Method, StatusCode, Uri},
+    extract::{connect_info::ConnectInfo, OriginalUri, State},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
@@ -75,10 +75,13 @@ async fn main() -> Result<()> {
         .with_context(|| format!("failed to bind {}", config.listen_addr))?;
 
     info!("sentinel-proxy listening on {}", config.listen_addr);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("server failed")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("server failed")?;
 
     Ok(())
 }
@@ -156,9 +159,10 @@ async fn stats(State(state): State<AppState>) -> Json<StatsResponse> {
 
 async fn proxy(
     State(state): State<AppState>,
+    ConnectInfo(client_addr): ConnectInfo<SocketAddr>,
     OriginalUri(original_uri): OriginalUri,
     method: Method,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     state.stats.total_requests.fetch_add(1, Ordering::Relaxed);
@@ -174,6 +178,8 @@ async fn proxy(
     };
 
     info!(%method, %upstream_url, "proxying request");
+
+    apply_forwarding_headers(&mut headers, &client_addr);
 
     let mut request = state.client.request(method, upstream_url).body(body);
     for (name, value) in headers.iter() {
@@ -192,6 +198,8 @@ async fn proxy(
                     response_builder = response_builder.header(name, value);
                 }
             }
+
+            response_builder = response_builder.header("x-sentinel-upstream", target.as_str());
 
             match upstream_response.bytes().await {
                 Ok(bytes) => {
@@ -225,6 +233,31 @@ fn build_upstream_url(target: &str, original_uri: &Uri) -> Result<String> {
         .unwrap_or("/");
 
     Ok(format!("{target}{path_and_query}"))
+}
+
+fn apply_forwarding_headers(headers: &mut HeaderMap, client_addr: &SocketAddr) {
+    append_header_value(headers, "x-forwarded-for", &client_addr.ip().to_string());
+
+    if !headers.contains_key("x-forwarded-proto") {
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+    }
+
+    if !headers.contains_key("x-forwarded-host") {
+        if let Some(host) = headers.get("host").cloned() {
+            headers.insert("x-forwarded-host", host);
+        }
+    }
+}
+
+fn append_header_value(headers: &mut HeaderMap, key: &'static str, value: &str) {
+    let next_value = match headers.get(key).and_then(|current| current.to_str().ok()) {
+        Some(current) if !current.trim().is_empty() => format!("{current}, {value}"),
+        _ => value.to_string(),
+    };
+
+    if let Ok(header_value) = HeaderValue::from_str(&next_value) {
+        headers.insert(key, header_value);
+    }
 }
 
 fn should_forward_request_header(name: &HeaderName) -> bool {
@@ -280,5 +313,29 @@ fn init_tracing() {
 async fn shutdown_signal() {
     if let Err(err) = tokio::signal::ctrl_c().await {
         error!(error = %err, "failed to listen for shutdown signal");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_header_value_sets_new_header() {
+        let mut headers = HeaderMap::new();
+
+        append_header_value(&mut headers, "x-forwarded-for", "127.0.0.1");
+
+        assert_eq!(headers["x-forwarded-for"], "127.0.0.1");
+    }
+
+    #[test]
+    fn append_header_value_appends_to_existing_chain() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("10.0.0.1"));
+
+        append_header_value(&mut headers, "x-forwarded-for", "127.0.0.1");
+
+        assert_eq!(headers["x-forwarded-for"], "10.0.0.1, 127.0.0.1");
     }
 }
